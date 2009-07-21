@@ -1,0 +1,11 @@
+#summary Module summary
+
+= Introduction =
+
+YAMM is a very simple and fast implementation of malloc()/free() suit for Unix-like systems. It’s fast, almost non-blocking and configurable. It has been tested on HP-UX, Solaris, AIX, and Linux. It can be built and used in 32- and 64-bit mode and support any application using standard malloc()/free() calls. 
+YAMM should easily ported to any platform supporting shared library preload and mmap() call
+
+
+= Features =
+
+First of all, YAMM is a very fast memory allocator. The more threads an application has the bigger the benefit. To achieve more one can tune it. And, the last application of YAMM is memory leak fighting. The leak diagnostic is quite primitive as of now. It will be improved if requested.
