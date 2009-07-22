@@ -8,4 +8,4 @@ YAMM should easily ported to any platform supporting shared library preload and 
 
 = Features =
 
-First of all, YAMM is a very fast memory allocator. The more threads an application has the bigger the benefit. To achieve more one can [tune] it. And, the last application of YAMM is memory leak fighting. The leak diagnostic is quite primitive as of now. It will be improved if requested.
+First of all, YAMM is a very fast memory allocator. The more threads an application has the bigger the benefit. To achieve more one can [tune] it. And, the last application of YAMM is memory [leak fighting]. The leak diagnostic is quite primitive as of now. It will be improved if requested.
