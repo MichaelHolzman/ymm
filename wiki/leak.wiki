@@ -1,4 +1,4 @@
-#summary Leaks finding
+#summary Leak detection
 
 = General Desription =
 
@@ -10,9 +10,13 @@ The second error type is _*'Memory leak'*_. An error of this type means a pure m
 
 
 
-= Details =
+= Configuration for Leak Detection =
 
-Add your content here.  Format your content with:
-  * Text in *bold* or _italic_
-  * Headings, paragraphs, and lists
-  * Automatic links to other wiki pages
+The memory leak monitoring is controlled by two variables set in {{{yamm_tune.c}}} (see [tune tuning]):
+
+{{{extern hrtime_t yamm_leak_check_start_time = 2;
+extern hrtime_t yamm_leak_check_stop_time = 150;}}}
+
+The first variable says when to start monitoring. It is the time (in seconds) from the application start. The latter defines when to stop monitoring. In the example above the monitoring will start two seconds after the invocation and will stop 148 seconds afterwards (150 seconds from the beginning). 
+
+A negative value of {{{yamm_leak_check_start_time}}} disables the monitoring.
