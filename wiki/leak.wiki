@@ -1,0 +1,18 @@
+#summary Leaks finding
+
+= General Desription =
+
+YAMM provides a very simple memory leak detection ability. After each memory block allocating, the block size and pointer are stored in the file named {{{yamm_leak.dat}}}. The file is located on the current work directory. This file is processed later by the {{{yamm_leak_report}}} application. The report application does not require command line parameters. It looks for the {{{yamm_leak.dat}}} file in the current working directory and produces a report if the file is found.
+
+Leak report contains messages of two types. The first type named _*'Potential memory leak'*_. An error of this type means that several allocations were done at this point of code but not all of them were freed. 
+
+The second error type is _*'Memory leak'*_. An error of this type means a pure memory leak: some space were allocated at this point of code and never released.
+
+
+
+= Details =
+
+Add your content here.  Format your content with:
+  * Text in *bold* or _italic_
+  * Headings, paragraphs, and lists
+  * Automatic links to other wiki pages
