@@ -13,7 +13,15 @@ Another possible waste of memory is the thread control structures holding some i
 
 The optimal configuration would know the maximum number of threads and size of each request to malloc(). It’s not possible in advance as there might be threads created by system or 3rd party libraries and there might be calls to malloc() from those threads and libraries.
 
-The solution is two-step. First, YAMM should be run in statistic gathering mode. It will produce a file per each thread with information about number and size of allocation requests for that thread. That information should be processes and the decision about the number of threads and sizes of blocks should be made. Then, there should be created a shared library libtamm_tune.so (or libtamm_tune64.so) containing appropriated definitions. The newly created library should then be used at run time. Note that file extension differ on some platforms. It might  be .sl, .so,  or .a
+= Tuning Details =
+
+The tuning is a two-step process. First, YAMM should be run in statistic gathering mode. It will produce a file per each thread with information about number and size of allocation requests for that thread. That information should be processes and the decision about the number of threads and sizes of blocks should be made. Then, there should be created a shared library {{{libyamm_tune.so}}} (or {{{libyamm_tune64.so}}}) containing appropriated definitions. The newly created library should then be used at run time. Note that file extension differ on some platforms. It might  be .sl, .so,  or .a
+
+*Note.* The YAMM allows getting the statistics data of a single thread. Since the raw statistics of each thread is stored in a separate file named {{{yamm_stat_<PID><PTHREAD_ID>.dat}}}, one can run 
+
+`yamm_stat  yamm_stat_00186_0000003.dat`
+
+to see the allocation statistics of the thread 3 of the process with PID = 186
  
 = Example =
 
