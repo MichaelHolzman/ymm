@@ -12,6 +12,12 @@ First of all, YAMM is a very fast memory allocator. The more threads an applicat
 
 = Installation = 
 
+The YAMM installation is straightforward:
+ # Create an installation directory
+ # Put the source files and scripts on the created directory
+ # Run {{{yamm_build.ksh}}} to get 64-bit version or {{{yamm_build.ksh  32}}} to get 32-bit version of libraries.
+ # Verify that the pair of {{{libyamm.sl}}} and {{{libyamm_tune.sl}}} or the pair of {{{libyamm64.sl}}} and {{{libyamm_tune64.sl}}} libraries is created
+
 = Using YAMM =
 
 There are two ways of using it. It can be added to the link line of application like any other library. It can also be invocated using environment variable {{{LD_PRELOAD}}} (it might have another name on some systems/modes). In that case, the application remains intact but uses another way of dealing with memory allocation.
