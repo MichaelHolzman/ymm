@@ -22,8 +22,9 @@ then
     CC="gcc -g"
     LIB_SUFF=so
     CCFLAGG="-x c -Wall -O2 -DLINUX -I. -pthread "
-    LDFLAGS="-shared "
+    LDFLAGS="-shared -lrt"
     BIT_SUFF=
+    LIBS="-lrt "
 fi
 
 if [[ `uname` = AIX ]]
@@ -69,5 +70,5 @@ echo "----------Build yamm_stat-----------"
 $CC $CCFLAGG -o yamm_stat${BIT_SUFF} yamm_stat.c
 echo "----------Build yamm_report ---------------"
 $CC $CCFLAGG -o yamm_leak_report yamm_leak_report.c
-echo "----------Build yamm_tune ---------------"
-$CC $CCFLAGG -o yamm${BIT_SUFF} yamm.c -D___MAIN_____ -L. -lyamm_tune${BIT_SUFF} -lpthread
+echo "----------Build yamm test ---------------"
+$CC $CCFLAGG -o yamm_test${BIT_SUFF} yamm.c -D___MAIN_____ -L. -lyamm_tune${BIT_SUFF} -lpthread ${LIBS}

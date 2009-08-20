@@ -93,11 +93,14 @@
 
 #define MAP_ALIGN       0
 
+#if !defined(EOWNERDEAD)
 #define EOWNERDEAD      0xFFFD
+#endif
 #define ELOCKUNMAPPED   0xFFFE
 #define ENOTACTIVE      0xFFFF
 
 #define pthread_self    getpid
-#endif
+
+#endif /* LINUX */
 
 #endif /* _YAMM_H_ */
