@@ -1,3 +1,5 @@
+#ifdef HPUX
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -365,32 +367,5 @@ static void PrintSourceCodeInfo(SInfoBlock* pInfoBlock)
     }
     printf("\n");
 }
-/*
-int main(int argc, char* argv[])
-{
-    int i = 0;
-    char* p[4] = { (char*)0x1, (char*)0x3, (char*)0x1234, (char*)0x9876};
 
-    UnwindIni();
-
-    for(i = 0; i < 5; i++)
-    {
-        Unwind(p[0], i + 1);
-        Unwind(p[1], i + 1);
-        Unwind(p[1], -1);
-        Unwind(p[2], i + 1);
-        Unwind(p[0], -1);
-        Unwind(p[3], i + 1);
-        if(i != 2) Unwind(p[2], -1);
-        Unwind(p[3], -1);
-    }
-
-    Unwind(p[0], 10);
-
-    UnwindEnd();
-
-    ReadAndProcessData();
-
-    return 1;
-}
-*/
+#endif

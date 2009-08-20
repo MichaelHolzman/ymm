@@ -13,9 +13,11 @@
 #include <sys/types.h>
 
 #include <time.h>  /* For leak check based on time */
+#include <limits.h>
 
-#include <yamm.h>
-#include <yamm_leak_hp.c>
+#include "yamm.h"
+#include "yamm_leak_hp.c"
+#include "yamm_leak_linux.c"
 
 #define IS_INITIALIZED            {if(1 != Initialized) Init();}
 #define ALIGNMENT                 8
@@ -39,8 +41,13 @@ extern int yamm_double_free;
 extern int yamm_sizes[];
 extern int yamm_is_dumper_on;
 extern int yamm_dump_interval;
+#ifdef LINUX
+extern unsigned long long yamm_leak_check_start_time;
+extern unsigned long long yamm_leak_check_stop_time;
+#else
 extern hrtime_t yamm_leak_check_start_time;
 extern hrtime_t yamm_leak_check_stop_time;
+#endif
 
 static int* Sizes = NULL;
 static int MaxThreadNum = 0;
@@ -49,10 +56,15 @@ static int DebugLevel = 0;
 static int DoubleFree = 0;
 static int IsDumperOn = 0;
 static int DumpInterval = 1;
-static hrtime_t LeakCheckStartTime = -1;
-static hrtime_t LeakCheckStopTime = 3;
+#ifdef LINUX
+unsigned long long LeakCheckStartTime = LONG_MAX;
+unsigned long long LeakCheckStopTime = 0;
+#else
+static hrtime_t LeakCheckStartTime = LONG_MAX;
+static hrtime_t LeakCheckStopTime = 0;
+#endif
 static pthread_mutex_t LeakCheckMutex = PTHREAD_MUTEX_INITIALIZER;
-static int      LeackCheakInProgress = 0;
+static int      LeackCheckInProgress = 0;
 
 struct _SBlockHead
 {
@@ -202,16 +214,16 @@ void* malloc(size_t bytes)
     pEH->m_DirectMap = 0;
     pEH->m_pNext     = NULL;
 
-    if((LeakCheckStartTime >= 0) && (!LeackCheakInProgress) && (LeakCheckStartTime < gethrtime()))
+    if((LONG_MAX != LeakCheckStartTime) && (!LeackCheckInProgress) && (LeakCheckStartTime < gethrtime()))
     {
         if(0 == pthread_mutex_lock(&LeakCheckMutex))
         {
-            LeackCheakInProgress = 1;
+            LeackCheckInProgress = 1;
 
             if(gethrtime() >= LeakCheckStopTime)
             {
                 UnwindEnd();
-                LeakCheckStartTime = -1;
+                LeakCheckStartTime = LONG_MAX;
             }
             else
             {
@@ -219,10 +231,9 @@ void* malloc(size_t bytes)
             }
             pthread_mutex_unlock(&LeakCheckMutex);
 
-            LeackCheakInProgress = 0;
+            LeackCheckInProgress = 0;
         }
     }
-
     return (void*)(((unsigned char*)pEH) + ELEMENT_HEAD_SIZE);
 }
 
@@ -236,16 +247,16 @@ void free(void* p)
         return;
     }
 
-    if((LeakCheckStartTime >= 0) && (!LeackCheakInProgress) && (LeakCheckStartTime < gethrtime()))
+    if((LONG_MAX != LeakCheckStartTime) && (!LeackCheckInProgress) && (LeakCheckStartTime < gethrtime()))
     {
         if(0 == pthread_mutex_lock(&LeakCheckMutex))
         {
-            LeackCheakInProgress = 1;
+            LeackCheckInProgress = 1;
 
             if(gethrtime() >= LeakCheckStopTime)
             {
                 UnwindEnd();
-                LeakCheckStartTime = -1;
+                LeakCheckStartTime = LONG_MAX;
             }
             else
             {
@@ -253,7 +264,7 @@ void free(void* p)
             }
             pthread_mutex_unlock(&LeakCheckMutex);
 
-            LeackCheakInProgress = 0;
+            LeackCheckInProgress = 0;
         }
     }
 
@@ -627,13 +638,14 @@ static void Init()
         pthread_create(&DumperThreadId, NULL, DumperThreadEntry, NULL);
     }
 
-    if(LeakCheckStartTime >= 0)
+    if(LeakCheckStartTime != LONG_MAX)
     {
-        LeakCheckStartTime = gethrtime() + LeakCheckStartTime * 1000000000;
-        LeakCheckStopTime  = gethrtime() + LeakCheckStopTime  * 1000000000;
-        LeackCheakInProgress = 1;
+        unsigned long long CurTime = gethrtime();
+        LeakCheckStartTime = CurTime + LeakCheckStartTime * 1000000000LL;
+        LeakCheckStopTime  = CurTime + LeakCheckStopTime  * 1000000000LL;
+        LeackCheckInProgress = 1;
         UnwindIni();
-        LeackCheakInProgress = 0;
+        LeackCheckInProgress = 0;
     }
 
     Status = pthread_mutex_unlock(&mutex);
