@@ -38,3 +38,9 @@ expecting up to 1000 threads ({{{yamm_max_thread_num}}}), without statistic outp
 We build the libraries when the file is ready and run the target application with YAMM for more than 150 seconds. The file {{{yamm_leak.dat}}} should be created in the current working directory when the required 150 seconds are over.
 
 If the file is produced and not empty, we run {{{yamm_leak_report}}} application and see the report on the terminal
+
+=== Linux Notes ===
+ # {{{addr2line}}} must be installed to get the source file and line number information
+ # {{{yamm_leak_check_start_time}}} should be set to {{{LONG_MAX}}} to disable leak check
+ # If {{{yamm_leak_report}}} fails to provide the source file name and line number, it can be obtained manually by running {{{addr2line -ifC -e <binary file> <address>}}}
+ # It might be required to add {{{/usr/lib/librt.so}}} to the {{{LD_PRELOAD}}} environment variable
