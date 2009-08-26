@@ -41,12 +41,17 @@ extern int yamm_double_free;
 extern int yamm_sizes[];
 extern int yamm_is_dumper_on;
 extern int yamm_dump_interval;
+extern int yamm_poison_check_enabled;
 #ifdef LINUX
 extern unsigned long long yamm_leak_check_start_time;
 extern unsigned long long yamm_leak_check_stop_time;
+extern long long yamm_poison_check_start_time;
+extern long long yamm_poison_check_stop_time;
 #else
 extern hrtime_t yamm_leak_check_start_time;
 extern hrtime_t yamm_leak_check_stop_time;
+extern hrtime_t yamm_poison_check_start_time;
+extern hrtime_t yamm_poison_check_stop_time;
 #endif
 
 static int* Sizes = NULL;
@@ -57,14 +62,27 @@ static int DoubleFree = 0;
 static int IsDumperOn = 0;
 static int DumpInterval = 1;
 #ifdef LINUX
-unsigned long long LeakCheckStartTime = LONG_MAX;
-unsigned long long LeakCheckStopTime = 0;
+static unsigned long long LeakCheckStartTime = LONG_MAX;
+static unsigned long long LeakCheckStopTime = 0;
 #else
 static hrtime_t LeakCheckStartTime = LONG_MAX;
 static hrtime_t LeakCheckStopTime = 0;
 #endif
 static pthread_mutex_t LeakCheckMutex = PTHREAD_MUTEX_INITIALIZER;
-static int      LeackCheckInProgress = 0;
+static int LeakCheckInProgress = 0;
+static int LeakFD = -1;
+static pthread_mutex_t PoisonCheckMutex = PTHREAD_MUTEX_INITIALIZER;
+static int PoisonCheckEnabled = 0;
+static int PoisonCheckInProgress = 0;
+static int PoisonFD = -1;
+
+#ifdef LINUX
+typedef unsigned long long uint64_t;
+#define POISON_SIZE               sizeof(uint64_t)
+static uint64_t PoisonPattern = 0xE5E5E5E5E5E5E5E5LL;
+#endif
+
+#define LEAK_CHECK_IS_ON ((LONG_MAX != LeakCheckStartTime) && (!LeakCheckInProgress) && (LeakCheckStartTime < gethrtime()))
 
 struct _SBlockHead
 {
@@ -113,6 +131,7 @@ static void  Init();
 static void* DumperThreadEntry(void *par);
 static unsigned char* StartList(int ElDataSize, int ThreadId);
 static void  SetNewTail(int SizeInx, int ThreadID, SElementHead* pFirstNewEl);
+static int   CreateFile(char* pFileNamePrefix);
 static void* BigMalloc(size_t bytes);
 static void  BigFree(void* p);
 static int*  PrepareStatFile(int ThreadId, int DumpNum);
@@ -139,6 +158,8 @@ void* malloc(size_t bytes)
     }
 
     /* Find required control block */
+    if(PoisonCheckEnabled) bytes += 2 * POISON_SIZE;
+
     for(i = 0; (Sizes[i] > 0) && (bytes > Sizes[i]); i++);
     if(Sizes[i] < 0)
     {
@@ -167,7 +188,6 @@ void* malloc(size_t bytes)
             if(bytes < MAX_TRACED_SIZE){pStat[ThreadID][bytes]++;}
         }
     }
-
     /* TODO find a better way of handling big thread numbers */
     ThreadID %= MaxThreadNum;
 
@@ -206,35 +226,59 @@ void* malloc(size_t bytes)
             SetNewTail(i, ThreadID, (SElementHead*)(pStart + BLOCK_HEAD_SIZE));
         }
     }
+
     /* Take the first element */
     pEH = pCB->m_pHeadEl;
     pCB->m_pHeadEl = pCB->m_pHeadEl->m_pNext;
     pEH->m_IsTaken   = 1;
-    pEH->m_Size      = bytes;
     pEH->m_DirectMap = 0;
     pEH->m_pNext     = NULL;
+    if(PoisonCheckEnabled)
+        pEH->m_Size  = bytes - 2 * POISON_SIZE;
+    else
+        pEH->m_Size  = bytes;
 
-    if((LONG_MAX != LeakCheckStartTime) && (!LeackCheckInProgress) && (LeakCheckStartTime < gethrtime()))
+    if(LEAK_CHECK_IS_ON)
     {
         if(0 == pthread_mutex_lock(&LeakCheckMutex))
         {
-            LeackCheckInProgress = 1;
+            LeakCheckInProgress = 1;
 
             if(gethrtime() >= LeakCheckStopTime)
             {
-                UnwindEnd();
+                if(!PoisonCheckEnabled) UnwindEnd();
                 LeakCheckStartTime = LONG_MAX;
             }
             else
             {
-                Unwind((void*)(((unsigned char*)pEH) + ELEMENT_HEAD_SIZE), bytes);
+                Unwind((void*)(((unsigned char*)pEH) + ELEMENT_HEAD_SIZE), bytes, LeakFD);
             }
             pthread_mutex_unlock(&LeakCheckMutex);
 
-            LeackCheckInProgress = 0;
+            LeakCheckInProgress = 0;
         }
     }
-    return (void*)(((unsigned char*)pEH) + ELEMENT_HEAD_SIZE);
+
+    if(PoisonCheckEnabled)
+    {
+        if((!PoisonCheckInProgress) && (0 == pthread_mutex_lock(&PoisonCheckMutex)))
+        {
+            PoisonCheckInProgress = 1;
+            Unwind((void*)(((unsigned char*)pEH) + ELEMENT_HEAD_SIZE + POISON_SIZE), pEH->m_Size, PoisonFD);
+            PoisonCheckInProgress = 0;
+            pthread_mutex_unlock(&PoisonCheckMutex);
+        }
+
+        /* Filled the poison areas */
+        *((uint64_t*)(((unsigned char*)pEH) + ELEMENT_HEAD_SIZE)) = PoisonPattern;
+        memcpy(((unsigned char*)pEH) + ELEMENT_HEAD_SIZE  + POISON_SIZE + pEH->m_Size,
+               (void*)&PoisonPattern,
+               POISON_SIZE
+              );
+        return (void*)(((unsigned char*)pEH) + ELEMENT_HEAD_SIZE + POISON_SIZE);
+    }
+    else
+        return (void*)(((unsigned char*)pEH) + ELEMENT_HEAD_SIZE);
 }
 
 void free(void* p)
@@ -247,36 +291,58 @@ void free(void* p)
         return;
     }
 
-    if((LONG_MAX != LeakCheckStartTime) && (!LeackCheckInProgress) && (LeakCheckStartTime < gethrtime()))
+    if(LEAK_CHECK_IS_ON)
     {
         if(0 == pthread_mutex_lock(&LeakCheckMutex))
         {
-            LeackCheckInProgress = 1;
+            LeakCheckInProgress = 1;
 
             if(gethrtime() >= LeakCheckStopTime)
             {
-                UnwindEnd();
+                if(!PoisonCheckEnabled) UnwindEnd();
                 LeakCheckStartTime = LONG_MAX;
             }
             else
             {
-                Unwind(p, -1);
+                Unwind(p, -1, LeakFD);
             }
             pthread_mutex_unlock(&LeakCheckMutex);
 
-            LeackCheckInProgress = 0;
+            LeakCheckInProgress = 0;
         }
     }
 
     IS_INITIALIZED;
 
-    pEH = (SElementHead*)((unsigned char*)p - ELEMENT_HEAD_SIZE);
+    if(PoisonCheckEnabled)
+    {
+        uint64_t TmpUint64;
+        pEH = (SElementHead*)((unsigned char*)p - ELEMENT_HEAD_SIZE - POISON_SIZE);
+
+        if((!PoisonCheckInProgress) && (0 == pthread_mutex_lock(&PoisonCheckMutex)))
+        {
+            PoisonCheckInProgress = 1;
+            /* Check poison areas */
+            memcpy(&TmpUint64, (unsigned char*)p + pEH->m_Size, POISON_SIZE);
+            if(PoisonPattern != *((uint64_t*)((unsigned char*)p - POISON_SIZE)))
+                Unwind(p, -1, PoisonFD); /* Front poison area is corrupted */
+
+            if(PoisonPattern != TmpUint64)
+                Unwind(p, -2, PoisonFD); /* Back poison area is corrupted */
+
+            PoisonCheckInProgress = 0;
+            pthread_mutex_unlock(&PoisonCheckMutex);
+        }
+    }
+    else
+        pEH = (SElementHead*)((unsigned char*)p - ELEMENT_HEAD_SIZE);
 
     if(1 == pEH->m_DirectMap)
     {
         BigFree(p);
         return;
     }
+
     if((0 == pEH->m_IsTaken) && (!DoubleFree))
     { /* Double free aborts */
         PrintErrnoMsg("Double free ", EMPTY_ERROR, __LINE__);
@@ -290,7 +356,10 @@ void free(void* p)
         pEH->m_IsTaken = 0;
     }
 
-    for(SizeInx = 0; (Sizes[SizeInx] > 0) && (pEH->m_Size > Sizes[SizeInx]); SizeInx++);
+    if(PoisonCheckEnabled)
+        for(SizeInx = 0; (Sizes[SizeInx] > 0) && (pEH->m_Size > Sizes[SizeInx] - 2 * POISON_SIZE); SizeInx++);
+    else
+        for(SizeInx = 0; (Sizes[SizeInx] > 0) && (pEH->m_Size > Sizes[SizeInx]); SizeInx++);
     if(Sizes[SizeInx] <= 0)
     {
         PrintErrnoMsg("Unexpected free() error ", EMPTY_ERROR, __LINE__);
@@ -322,7 +391,13 @@ void *realloc(void *ptr, size_t size)
         return NULL;
     }
 
-    pEH = (SElementHead*)((unsigned char*)ptr - ELEMENT_HEAD_SIZE);
+    if(PoisonCheckEnabled)
+    {
+        pEH = (SElementHead*)((unsigned char*)ptr - ELEMENT_HEAD_SIZE - POISON_SIZE);
+        /* The check is done insided the free() */
+    }
+    else
+        pEH = (SElementHead*)((unsigned char*)ptr - ELEMENT_HEAD_SIZE);
 
     if(pEH->m_Size <= size)
     {
@@ -365,6 +440,7 @@ static void* MallocAndAlign(size_t size, size_t alignment)
 
     /* Calculate a new size which suffice for the data and alignment */
     GuaranteedSize = size + (ELEMENT_HEAD_SIZE / alignment + 2) * alignment;
+    if(PoisonCheckEnabled) GuaranteedSize += 2 * POISON_SIZE;
 
     /* Allocate that guaranteed space */
     p = malloc(GuaranteedSize);
@@ -390,11 +466,30 @@ static void* MallocAndAlign(size_t size, size_t alignment)
     }
 
     /* Register the taken block */
-    pEH = (SElementHead*)((unsigned char*) pAligned - ELEMENT_HEAD_SIZE);
+    if(PoisonCheckEnabled)
+    {
+        pEH = (SElementHead*)((unsigned char*) pAligned - ELEMENT_HEAD_SIZE - POISON_SIZE);
+        pEH->m_pMasterEH = (SElementHead*)((unsigned char*)p - ELEMENT_HEAD_SIZE - POISON_SIZE);
+        /* Fill the poison areas */
+        *((uint64_t*)(((unsigned char*)pAligned) - POISON_SIZE)) = PoisonPattern;
+        memcpy(((unsigned char*)pAligned) + size, (void*)&PoisonPattern, POISON_SIZE);
+
+        if((!PoisonCheckInProgress) && (0 == pthread_mutex_lock(&PoisonCheckMutex)))
+        {
+            PoisonCheckInProgress = 1;
+            Unwind(pAligned, size, PoisonFD);
+            PoisonCheckInProgress = 0;
+            pthread_mutex_unlock(&PoisonCheckMutex);
+        }
+    }
+    else
+    {
+        pEH = (SElementHead*)((unsigned char*) pAligned - ELEMENT_HEAD_SIZE);
+        pEH->m_pMasterEH = (SElementHead*)((unsigned char*)p - ELEMENT_HEAD_SIZE);
+    }
 
     pEH->m_IsTaken   = 1;
     pEH->m_Size      = size;
-    pEH->m_pMasterEH = (SElementHead*)((unsigned char*)p - ELEMENT_HEAD_SIZE);
     pEH->m_DirectMap = pEH->m_pMasterEH->m_DirectMap;
     pEH->m_pMasterEH->m_Size = GuaranteedSize;
 
@@ -579,7 +674,8 @@ static void Init()
     IsDumperOn = yamm_is_dumper_on;
     DumpInterval = yamm_dump_interval;
     LeakCheckStartTime = yamm_leak_check_start_time;
-    LeakCheckStopTime = yamm_leak_check_stop_time ;
+    LeakCheckStopTime = yamm_leak_check_stop_time;
+    PoisonCheckEnabled = yamm_poison_check_enabled;
 
     for(SizesNum = 0; yamm_sizes[SizesNum] >= 0; SizesNum++);
     SizesNum++;
@@ -602,8 +698,12 @@ static void Init()
     Sizes = (pint)(p + (sizeof(SControl) * SizesNum + sizeof(SControlBlock) * SizesNum * MaxThreadNum + sizeof(pint) * MaxThreadNum));
 
     /* Initializae the control data */
-    for(i = 0; i < SizesNum; i++)
-        Sizes[i] = yamm_sizes[i];
+    for(i = 0; i < SizesNum - 1; i++)
+        if(PoisonCheckEnabled)
+            Sizes[i] = yamm_sizes[i] + 2 * POISON_SIZE;
+        else
+            Sizes[i] = yamm_sizes[i];
+    Sizes[i] = -1;
 
     PageSize = sysconf(_SC_PAGESIZE);
     for(i = 0; i < SizesNum; i++)
@@ -643,9 +743,17 @@ static void Init()
         unsigned long long CurTime = gethrtime();
         LeakCheckStartTime = CurTime + LeakCheckStartTime * 1000000000LL;
         LeakCheckStopTime  = CurTime + LeakCheckStopTime  * 1000000000LL;
-        LeackCheckInProgress = 1;
+        LeakFD = CreateFile("yamm_leak_");
+        LeakCheckInProgress = 1;
         UnwindIni();
-        LeackCheckInProgress = 0;
+        LeakCheckInProgress = 0;
+    }
+
+    if(PoisonCheckEnabled)
+    {
+        PoisonCheckInProgress = 0;
+        PoisonFD = CreateFile("yamm_poison_");
+        UnwindIni();
     }
 
     Status = pthread_mutex_unlock(&mutex);
@@ -749,6 +857,39 @@ static unsigned char* StartList(int ElDataSize, int ThreadId)
     return (unsigned char *)p;
 }
 
+static int CreateFile(char* pFileNamePrefix)
+{
+    static int NumStringLen = 10;
+    char FileName[64];
+    int  fd;
+    int  i, n;
+
+    /* Make the file name from the prefix and the PID */
+    strcpy(FileName, pFileNamePrefix);
+    i = strlen(FileName);
+    fd = getpid();
+    for(n = NumStringLen; n >= 0; n--)
+    {
+        FileName[i + n] = '0' + (fd % 10);
+        fd /= 10;
+    }
+    FileName[i + NumStringLen + 1] = '\0';
+    strcat(FileName, ".dat");
+
+    /* Create the file */
+    fd = creat(FileName, 0644);
+    if(-1 == fd)
+    {
+        const char ErroMsgPrefix[] = "Can't create data file ";
+        write(2, ErroMsgPrefix, strlen(ErroMsgPrefix));
+        write(2, FileName, strlen(FileName));
+        write(2, " : ", 3);
+        write(2, strerror(errno), strlen(strerror(errno)));
+        write(2, "\n", 1);
+    }
+    return fd;
+}
+
 static void SetNewTail(int SizeInx, int ThreadID, SElementHead* pFirstNewEl)
 {
     int            Status;
@@ -812,10 +953,33 @@ static void* BigMalloc(size_t bytes)
     pEH = (SElementHead*)p;
 
     pEH->m_IsTaken   = 1;
-    pEH->m_Size      = bytes;
+    if(PoisonCheckEnabled)
+        pEH->m_Size  = bytes - 2 * POISON_SIZE;
+    else
+        pEH->m_Size  = bytes;
     pEH->m_DirectMap = 1;
     pEH->m_pMasterEH = NULL;
-    return (((unsigned char*)p) + ELEMENT_HEAD_SIZE);
+
+    if(PoisonCheckEnabled)
+    {
+        if((!PoisonCheckInProgress) && (0 == pthread_mutex_lock(&PoisonCheckMutex)))
+        {
+            PoisonCheckInProgress = 1;
+            Unwind((void*)(((unsigned char*)pEH) + ELEMENT_HEAD_SIZE + POISON_SIZE), pEH->m_Size, PoisonFD);
+            PoisonCheckInProgress = 0;
+            pthread_mutex_unlock(&PoisonCheckMutex);
+        }
+
+        /* Filled the poison areas */
+        *((uint64_t*)(((unsigned char*)pEH) + ELEMENT_HEAD_SIZE)) = PoisonPattern;
+        memcpy(((unsigned char*)pEH) + ELEMENT_HEAD_SIZE + POISON_SIZE + pEH->m_Size,
+               (void*)&PoisonPattern,
+               POISON_SIZE
+              );
+        return (void*)(((unsigned char*)pEH) + ELEMENT_HEAD_SIZE + POISON_SIZE);
+    }
+    else
+        return (void*)(((unsigned char*)pEH) + ELEMENT_HEAD_SIZE);
 }
 
 static void BigFree(void* p)
@@ -830,7 +994,13 @@ static void BigFree(void* p)
         return;
     }
 
-    pEH = (SElementHead*)((unsigned char*)p - ELEMENT_HEAD_SIZE);
+    if(PoisonCheckEnabled)
+    {
+        pEH = (SElementHead*)((unsigned char*)p - ELEMENT_HEAD_SIZE - POISON_SIZE);
+        /* Check poison areas is already done inside the free()*/
+    }
+    else
+        pEH = (SElementHead*)((unsigned char*)p - ELEMENT_HEAD_SIZE);
 
     if(NULL != pEH->m_pMasterEH)
         pEH = pEH->m_pMasterEH;
