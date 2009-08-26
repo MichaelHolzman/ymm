@@ -59,9 +59,6 @@ then
     fi
 fi
 
-
-
-
 echo "----------Build libyamm_tune  -----------"
 $CC $CCFLAGG $LDFLAGS -o libyamm_tune${BIT_SUFF}.${LIB_SUFF} yamm_tune.c
 echo "----------Build libyamm  -----------"
@@ -69,6 +66,6 @@ $CC $CCFLAGG $LDFLAGS -o libyamm${BIT_SUFF}.${LIB_SUFF} yamm.c
 echo "----------Build yamm_stat-----------"
 $CC $CCFLAGG -o yamm_stat${BIT_SUFF} yamm_stat.c
 echo "----------Build yamm_report ---------------"
+rm -f yamm_poison_report
 $CC $CCFLAGG -o yamm_leak_report yamm_leak_report.c
-echo "----------Build yamm test ---------------"
-$CC $CCFLAGG -o yamm_test${BIT_SUFF} yamm.c -D___MAIN_____ -L. -lyamm_tune${BIT_SUFF} -lpthread ${LIBS}
+ln yamm_leak_report yamm_poison_report
