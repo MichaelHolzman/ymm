@@ -1,7 +1,8 @@
 #ifdef LINUX
 #include <stdlib.h>
 #include <stdio.h>
-#include <time.h> 
+#include <time.h>
+#include <sys/time.h>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -30,9 +31,9 @@ static  byte WriteBuffer[WRITE_BUFFER_SIZE];
 
 static unsigned long long gethrtime()
 {
-    struct timespec TimeSpec;
-    clock_gettime(CLOCK_REALTIME, &TimeSpec);
-    return (TimeSpec.tv_sec * 1000000000LL + TimeSpec.tv_nsec);
+    struct timeval TimeSpec;
+    gettimeofday(&TimeSpec, NULL);
+    return (TimeSpec.tv_sec * 1000000000LL + TimeSpec.tv_usec * 1000LL);
 }
 
 static void UnwindIni()
