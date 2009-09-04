@@ -13,7 +13,11 @@ int yamm_poison_check_enabled = 1;
 #ifdef LINUX
 unsigned long long yamm_leak_check_start_time = LONG_MAX;
 unsigned long long yamm_leak_check_stop_time = 10;
+unsigned long long yamm_poison_check_start_time = LONG_MAX;
+unsigned long long yamm_poison_check_stop_time = 10;
 #else
-hrtime_t yamm_leak_check_start_time = 1;
+hrtime_t yamm_leak_check_start_time = LONG_MAX;
 hrtime_t yamm_leak_check_stop_time = 2;
+hrtime_t yamm_poison_check_start_time = LONG_MAX;
+hrtime_t yamm_poison_check_stop_time = 2;
 #endif
