@@ -29,42 +29,27 @@ static struct uwx_self_info *pInfo;
 typedef unsigned char byte;
 
 #define WRITE_BUFFER_SIZE 10240
-static  char LeakFileName[] = "yamm_leak.dat";
-static  byte WriteBuffer[WRITE_BUFFER_SIZE];
-static  int WriteFD;
+
+static byte WriteBuffer[WRITE_BUFFER_SIZE];
+static int  LibUnwindIsReady = 0;
 
 static void UnwindIni()
 {
-    int Status;
-
-    WriteFD = creat(LeakFileName, 0644);
-    if(-1 == WriteFD)
-    {
-        const char ErroMsgPrefix[] = "Can't create leak data file ";
-        write(2, ErroMsgPrefix, strlen(ErroMsgPrefix));
-        write(2, LeakFileName, strlen(LeakFileName));
-        write(2, " : ", 3);
-        write(2, strerror(errno), strlen(strerror(errno)));
-        write(2, "\n", 1);
-        return;
-    }
-
     pEnv = uwx_init();
     pInfo = uwx_self_init_info(pEnv);
-    Status = uwx_register_callbacks(pEnv, (intptr_t)pInfo, uwx_self_copyin, uwx_self_lookupip);
+    if(UWX_OK == uwx_register_callbacks(pEnv, (intptr_t)pInfo, uwx_self_copyin, uwx_self_lookupip))
+        LibUnwindIsReady = 1;
+    else
+        write(2, "libunwind is not initialized properly\n", 39);
 }
 
 static void UnwindEnd()
 {
-    if(-1 == WriteFD)
-        return;
-    close(WriteFD);
-
     uwx_self_free_info(pInfo);
     uwx_free(pEnv);
 }
 
-static void Unwind(char* pData, int size)
+static void Unwind(char* pData, int size, int fd)
 {
     int   Level = 0;
     int   Status;
@@ -77,7 +62,7 @@ static void Unwind(char* pData, int size)
     int   StringInfoLen;
     byte* p;
 
-    if(-1 == WriteFD)
+    if((-1 == fd) || (LibUnwindIsReady != 1))
         return;
 
     InfoBlock.m_p    = pData;
@@ -113,8 +98,8 @@ static void Unwind(char* pData, int size)
             }
         }
     }
-    if((sizeof(InfoBlock) != write(WriteFD, &InfoBlock, sizeof(InfoBlock))) ||
-       (InfoBlock.m_CodeStringLen != write(WriteFD, WriteBuffer, InfoBlock.m_CodeStringLen))
+    if((sizeof(InfoBlock) != write(fd, &InfoBlock, sizeof(InfoBlock))) ||
+       (InfoBlock.m_CodeStringLen != write(fd, WriteBuffer, InfoBlock.m_CodeStringLen))
       )
     {
         static char ErrMsg[] = "Leak data file is corrupted\n";
@@ -125,6 +110,7 @@ static void Unwind(char* pData, int size)
 /* ANALYZER */
 
 static void CheckFree(SInfoBlock* pInfoBlock);
+static void CheckPoison(SInfoBlock* pInfoBlock);
 static void AddAlloc(SInfoBlock* pInfoBlock);
 static void Report();
 static void PrintSourceCodeInfo(SInfoBlock* pInfoBlock);
@@ -136,18 +122,21 @@ static SInfoBlock* pBadBlock = NULL; /* a member is not used if m_p contains NUL
 static int GoodBlockNum = 0;
 static SInfoBlock* pGoodBlock = NULL; /* a member is not used if m_p is negative */
 
-static void ReadAndProcessData()
+#define LEAK_MODE 0
+#define POISON_MODE 1
+
+static void ReadAndProcessData(int Mode, char* pFileName)
 {
     struct stat State;
     int fd;
     int len;
     byte* pData, *p;
 
-    if((fd = open(LeakFileName, O_RDONLY)) < 0)
+    if((fd = open(pFileName, O_RDONLY)) < 0)
     {
         static char ErrorMsgPrefix[] = "Cannot open leak data file ";
         write(2, ErrorMsgPrefix, strlen(ErrorMsgPrefix));
-        write(2, LeakFileName, strlen(LeakFileName));
+        write(2, pFileName, strlen(pFileName));
         write(2, " : ", 3);
         write(2, strerror(errno), strlen(strerror(errno)));
         write(2, "\n", 1);
@@ -158,7 +147,7 @@ static void ReadAndProcessData()
         static char ErrorMsgPrefix[] = "Cannot obtain leak data file ";
         static char ErrorMsgInsert[] = " details: ";;
         write(2, ErrorMsgPrefix, strlen(ErrorMsgPrefix));
-        write(2, LeakFileName, strlen(LeakFileName));
+        write(2, pFileName, strlen(pFileName));
         write(2, ErrorMsgInsert, strlen(ErrorMsgInsert));
         write(2, strerror(errno), strlen(strerror(errno)));
         write(2, "\n", 1);
@@ -170,7 +159,7 @@ static void ReadAndProcessData()
     {
         static char ErrorMsgPrefix[] = "Cannot map leak data file ";
         write(2, ErrorMsgPrefix, strlen(ErrorMsgPrefix));
-        write(2, LeakFileName, strlen(LeakFileName));
+        write(2, pFileName, strlen(pFileName));
         write(2, " : ", 3);
         write(2, strerror(errno), strlen(strerror(errno)));
         write(2, "\n", 1);
@@ -199,12 +188,16 @@ static void ReadAndProcessData()
             len += RealFileNameLen  + 2 * sizeof(int);
         }
         if(InfoBlock.m_Size < 0)
-            CheckFree(&InfoBlock);
+            if(LEAK_MODE == Mode)
+                CheckFree(&InfoBlock);
+            else
+                CheckPoison(&InfoBlock);
         else
             AddAlloc(&InfoBlock);
     }
 
-    Report();
+    if(LEAK_MODE == Mode)
+        Report();
 
     if((NULL != pData) && (MAP_FAILED != pData))
         munmap(pData, len);
@@ -263,12 +256,33 @@ static void CheckFree(SInfoBlock* pInfoBlock)
                 pGoodBlock = pNewBlock;
                 GoodBlockNum = NewGoodBlockNum;
 
-                /* Store the matched datat */
+                /* Store the matched data */
                 memcpy(pGoodBlock + j, pBadBlock + i, sizeof(SInfoBlock));
                 pGoodBlock[j].m_p = (void*)1;
                 pBadBlock[i].m_p = NULL;
                 return;
             }
+        }
+    }
+}
+
+static void CheckPoison(SInfoBlock* pInfoBlock)
+{
+    int i = 0;
+    /* Match free and alloc */
+    for(i = 0; i < BadBlockNum; i++)
+    {
+        if(pBadBlock[i].m_p == pInfoBlock->m_p)
+        {
+            /* Report the poison corruption */
+            printf("The %s poison area is corrupted for the block of %d bytes\n",
+                   pInfoBlock->m_Size == -1 ? "front" : "back", pBadBlock[i].m_Size
+                  );
+            printf("allocated at:\n");
+            PrintSourceCodeInfo(pBadBlock + i);
+            printf("\n\n and released at:\n");
+            PrintSourceCodeInfo(pInfoBlock);
+            pBadBlock[i].m_p = NULL;
         }
     }
 }
