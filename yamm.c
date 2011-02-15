@@ -41,6 +41,7 @@ extern int yamm_double_free;
 extern int yamm_sizes[];
 extern int yamm_is_dumper_on;
 extern int yamm_dump_interval;
+static int yamm_quasi_poison_check = 1;
 #ifdef LINUX
 extern unsigned long long yamm_leak_check_start_time;
 extern unsigned long long yamm_leak_check_stop_time;
@@ -60,6 +61,7 @@ static int DebugLevel = 0;
 static int DoubleFree = 0;
 static int IsDumperOn = 0;
 static int DumpInterval = 1;
+static unsigned char PoisonFiller = 0xE5;
 #ifdef LINUX
 static unsigned long long LeakCheckStartTime = LONG_MAX;
 static unsigned long long LeakCheckStopTime = 0;
@@ -143,6 +145,7 @@ static void  SetNewTail(int SizeInx, int ThreadID, SElementHead* pFirstNewEl);
 static int   CreateFile(char* pFileNamePrefix);
 static void* BigMalloc(size_t bytes);
 static void  BigFree(void* p);
+static int   ByteNotFound(void* s, unsigned char Byte, size_t Len);
 static int*  PrepareStatFile(int ThreadId, int DumpNum);
 static void  PrintErrnoMsg(char* pUserMsg, int ErrNum, int Line);
 static void  PrintState();
@@ -294,7 +297,16 @@ void* malloc(size_t bytes)
         return (void*)(((unsigned char*)pEH) + ELEMENT_HEAD_SIZE + POISON_SIZE);
     }
     else
+    {
+        if(yamm_quasi_poison_check)
+        {
+            int FilledSize = ELEMENT_SIZE(bytes) - sizeof(SElementHead);
+            int Offset = sizeof(SElementHead);
+            memset((void*)(((unsigned char*)pEH) + Offset), PoisonFiller, FilledSize);
+            /*memset((void*)(((unsigned char*)pEH) + ELEMENT_HEAD_SIZE), 0, bytes);*/
+        }
         return (void*)(((unsigned char*)pEH) + ELEMENT_HEAD_SIZE);
+    }
 }
 
 void free(void* p)
@@ -370,6 +382,26 @@ void free(void* p)
         PrintErrnoMsg("Double free ", EMPTY_ERROR, __LINE__);
         abort();
     }
+    
+    if(yamm_quasi_poison_check)
+    {
+        static char LowerBorderMsg[] = "Lower border was overwritten\n";
+        static char UpperBorderMsg[] = "Upper border was overwritten\n";
+        int AbortNeeded = 0;
+        if(ByteNotFound(((unsigned char*)pEH) + sizeof(SElementHead), PoisonFiller,  ELEMENT_HEAD_SIZE - sizeof(SElementHead)))
+        {
+            write(2, LowerBorderMsg, strlen(LowerBorderMsg));
+            AbortNeeded = 1;
+        }
+        if(ByteNotFound(((unsigned char*)p) + pEH->m_Size, PoisonFiller, ELEMENT_SIZE(pEH->m_Size) - ELEMENT_HEAD_SIZE - pEH->m_Size))
+        {
+            write(2, UpperBorderMsg, strlen(UpperBorderMsg));
+            AbortNeeded = 1;
+        }
+        if(AbortNeeded)
+            abort();
+    }
+    
     pEH->m_IsTaken = 0;
     if(NULL != pEH->m_pMasterEH)
     {
@@ -1021,7 +1053,16 @@ static void* BigMalloc(size_t bytes)
         return (void*)(((unsigned char*)pEH) + ELEMENT_HEAD_SIZE + POISON_SIZE);
     }
     else
+    {
+        if(yamm_quasi_poison_check)
+        {
+            int FilledSize = ELEMENT_SIZE(bytes) - sizeof(SElementHead);
+            int Offset = sizeof(SElementHead);
+            memset((void*)(((unsigned char*)pEH) + Offset), PoisonFiller, FilledSize);
+            /*memset((void*)(((unsigned char*)pEH) + ELEMENT_HEAD_SIZE), 0, bytes);*/
+        }
         return (void*)(((unsigned char*)pEH) + ELEMENT_HEAD_SIZE);
+    }
 }
 
 static void BigFree(void* p)
@@ -1047,12 +1088,43 @@ static void BigFree(void* p)
     if(NULL != pEH->m_pMasterEH)
         pEH = pEH->m_pMasterEH;
 
-     if(-1 == munmap((void*)pEH, pEH->m_Size + ELEMENT_HEAD_SIZE))
-     {
+    if(yamm_quasi_poison_check)
+    {
+        static char LowerBorderMsg[] = "Lower border was overwritten\n";
+        static char UpperBorderMsg[] = "Upper border was overwritten\n";
+        int AbortNeeded = 0;
+        if(ByteNotFound(((unsigned char*)pEH) + sizeof(SElementHead), PoisonFiller,  ELEMENT_HEAD_SIZE - sizeof(SElementHead)))
+        {
+            write(2, LowerBorderMsg, strlen(LowerBorderMsg));
+            AbortNeeded = 1;
+        }
+        if(ByteNotFound(((unsigned char*)p) + pEH->m_Size, PoisonFiller, ELEMENT_SIZE(pEH->m_Size) - ELEMENT_HEAD_SIZE - pEH->m_Size))
+        {
+            write(2, UpperBorderMsg, strlen(UpperBorderMsg));
+            AbortNeeded = 1;
+        }
+        if(AbortNeeded)
+            abort();
+    }
+
+    memset(p, PoisonFiller, pEH->m_Size);
+    if(-1 == munmap((void*)pEH, pEH->m_Size + ELEMENT_HEAD_SIZE))
+    {
         /* TODO check correspondence of error codes */
         PrintErrnoMsg("BigFree() can't unmap memory ", errno, __LINE__);
         return;
     }
+}
+
+static int ByteNotFound(void* s, unsigned char Byte, size_t Len)
+{
+    size_t i;
+    unsigned char* p;
+    p = (unsigned char*)s;
+    for(i = 0; i < Len; i++)
+        if(p[i] != Byte)
+            return 1;
+    return 0;
 }
 
 static int* PrepareStatFile(int ThreadId, int DumpNum)
@@ -1304,3 +1376,4 @@ static void PrintState()
         }
     }
 }
+
